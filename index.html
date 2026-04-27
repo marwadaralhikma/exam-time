@@ -1,0 +1,260 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { User, Clock, CheckCircle, Calendar, ShieldCheck, AlertCircle, Star, Users, Info, X } from 'lucide-react';
+
+// إعدادات فايربيز يتم توفيرها من بيئة التشغيل تلقائياً
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'scheduler-app-v1';
+
+/**
+ * تم تحديث رابط الـ Webhook الخاص بكِ لربط التطبيق بجوجل شيت مباشرة
+ */
+const GOOGLE_SHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzIiJQ7Pd7EuH1sLdcOiczNjqYUZscWUQD7gphqsr3USgq4cSJw5qkDgMMAfMUkG2Tp/exec"; 
+
+const TEACHERS = [
+  { id: 't1', name: 'إيمان جابر', duration: 20, slots: 2, day: 'الثلاثاء 19 مايو' },
+  { id: 't2', name: 'إيمان حسن الخريبي', duration: 20, slots: 2, day: 'الثلاثاء 19 مايو' },
+  { id: 't3', name: 'شمس أسامة', duration: 20, slots: 2, day: 'الخميس 21 مايو' },
+  { id: 't4', name: 'أميمة شاكر (أحد وثلاثاء)', duration: 20, slots: 2, day: 'الثلاثاء 19 مايو' },
+  { id: 't5', name: 'نادين عصام (أحد وثلاثاء)', duration: 20, slots: 2, day: 'الأحد 24 مايو' },
+  { id: 't6', name: 'ميرفت', duration: 25, slots: 3, day: 'الأحد 24 مايو' },
+  { id: 't7', name: 'شيماء نعيم', duration: 30, slots: 2, day: 'الأحد 24 مايو' },
+  { id: 't8', name: 'نعمة ماهر', duration: 20, slots: 1, day: 'الخميس 21 مايو' },
+  { id: 't9', name: 'حياة المليكي', duration: 25, slots: 2, day: 'الأحد 7 يونيو' },
+  { id: 't10', name: 'منار أبو العباس (سيدات)', duration: 20, slots: 1, day: 'الأحد 7 يونيو' },
+  { id: 't11', name: 'منار أبو العباس (اثنين وأربعاء)', duration: 30, slots: 1, day: 'الاثنين 25 مايو' },
+  { id: 't12', name: 'فاطمة أسلم', duration: 20, slots: 2, day: 'الأربعاء 20 مايو' },
+  { id: 't13', name: 'أماني الغزولي', duration: 20, slots: 2, day: 'الأربعاء 20 مايو' },
+  { id: 't14', name: 'علا محمد', duration: 20, slots: 2, day: 'الأربعاء 20 مايو' },
+  { id: 't15', name: 'نهى أحمد', duration: 20, slots: 2, day: 'الأربعاء 20 مايو' },
+  { id: 't16', name: 'علياء وليد', duration: 25, slots: 2, day: 'الخميس 21 مايو' },
+  { id: 't17', name: 'أنيسة النهاري', duration: 25, slots: 2, day: 'الأحد 24 مايو' },
+  { id: 't18', name: 'أسماء محمود', duration: 25, slots: 2, day: 'الاثنين 25 مايو' },
+  { id: 't19', name: 'مي محمد', duration: 30, slots: 2, day: 'الاثنين 25 مايو' },
+  { id: 't20', name: 'هيفاء الشنان', duration: 25, slots: 3, day: 'الاثنين 8 يونيو' },
+  { id: 't21', name: 'سحر عبد الحكيم', duration: 25, slots: 2, day: 'الاثنين 8 يونيو' },
+  { id: 't22', name: 'أميمة شاكر (اثنين وأربعاء)', duration: 25, slots: 2, day: 'الاثنين 25 مايو' },
+  { id: 't23', name: 'نادين عصام (اثنين وأربعاء)', duration: 20, slots: 2, day: 'الأحد 24 مايو' },
+  { id: 't24', name: 'منار أبو العباس (ثلاثاء)', duration: 25, slots: 2, day: 'الأحد 7 يونيو' },
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [reservations, setReservations] = useState({});
+  const [selectedTeacher, setSelectedTeacher] = useState(TEACHERS[0]);
+  const [studentName, setStudentName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showRoyalModal, setShowRoyalModal] = useState(false);
+  const [message, setMessage] = useState({ text: '', type: '' });
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) { console.error(error); setLoading(false); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
+    return onSnapshot(q, (snapshot) => {
+      const data = {};
+      snapshot.forEach((doc) => { data[doc.id] = doc.data(); });
+      setReservations(data);
+    }, (error) => console.error("Firestore Error:", error));
+  }, [user]);
+
+  const getTimeSlotsForTeacher = (teacher) => {
+    const slots = [];
+    let current = new Date();
+    current.setHours(16, 0, 0);
+    const end = new Date();
+    end.setHours(18, 40, 0);
+
+    while (current <= end) {
+      slots.push(current.toLocaleTimeString('en-US', { 
+        hour: '2-digit', minute: '2-digit', hour12: true 
+      }));
+      current.setMinutes(current.getMinutes() + teacher.duration);
+    }
+    return slots;
+  };
+
+  const handleBooking = async (time, committeeIndex) => {
+    if (!studentName.trim()) {
+      showMessage('يرجى إدخال اسم الطالبة أولاً', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    const slotId = `${selectedTeacher.id}-${time}-${committeeIndex}`;
+    
+    const bookingData = {
+      studentName,
+      teacherName: selectedTeacher.name,
+      time: time,
+      day: selectedTeacher.day,
+      committee: committeeIndex + 1,
+      timestamp: new Date().toLocaleString('ar-EG'),
+      userId: user.uid
+    };
+
+    try {
+      // حفظ في فايربيز للمزامنة اللحظية بين الأجهزة
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bookings', slotId), bookingData);
+      
+      // إرسال البيانات إلى جوجل شيت عبر الرابط الجديد
+      if (GOOGLE_SHEET_WEBHOOK_URL) {
+        fetch(GOOGLE_SHEET_WEBHOOK_URL, { 
+          method: 'POST', 
+          mode: 'no-cors', 
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bookingData) 
+        });
+      }
+      
+      setStudentName('');
+      setShowRoyalModal(true);
+    } catch (error) {
+      showMessage('حدث خطأ أثناء الحجز، حاول مجدداً', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const showMessage = (text, type) => {
+    setMessage({ text, type });
+    setTimeout(() => setMessage({ text: '', type: '' }), 4000);
+  };
+
+  const currentSlots = getTimeSlotsForTeacher(selectedTeacher);
+
+  if (loading) return (
+    <div className="min-h-screen bg-sky-50 flex items-center justify-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-sky-600"></div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-sky-50/40 text-right font-sans pb-12 antialiased" dir="rtl" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+      
+      {showRoyalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-sky-900/40 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl max-w-lg w-full overflow-hidden border border-amber-100 animate-in zoom-in-95 duration-300">
+            <div className="bg-gradient-to-r from-sky-600 to-blue-600 p-6 text-white text-center relative">
+              <button onClick={() => setShowRoyalModal(false)} className="absolute left-4 top-4 text-white/80"><X size={24} /></button>
+              <div className="bg-white/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3"><CheckCircle size={32} /></div>
+              <h3 className="text-2xl font-bold">تم تأكيد الحجز بنجاح</h3>
+            </div>
+            <div className="p-8 text-center space-y-6">
+              <p className="text-xl font-bold text-sky-900 leading-relaxed">يجب التواجد قبل موعد اختبار الطالبة</p>
+              <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex gap-3 text-right">
+                <Info className="text-amber-600 shrink-0 mt-1" size={20} />
+                <p className="text-sm text-amber-800 leading-relaxed">الوقت المحدد تقريبي ويعتمد على إنهاء الطالبة السابقة للاختبار.</p>
+              </div>
+              <button onClick={() => setShowRoyalModal(false)} className="w-full py-4 bg-sky-600 text-white rounded-2xl font-bold text-lg shadow-lg hover:bg-sky-700 transition-all">إغلاق</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-gradient-to-br from-sky-600 to-blue-700 text-white pt-16 pb-32 px-4 relative shadow-lg text-center">
+          <h1 className="text-4xl md:text-5xl font-extrabold drop-shadow-md">تحديد موعد الاختبار</h1>
+      </div>
+
+      <div className="max-w-4xl mx-auto -mt-16 px-4">
+        <div className="bg-white/90 backdrop-blur-md rounded-[2.5rem] shadow-xl border border-white/50 p-8 md:p-10 mb-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+            <div className="space-y-4">
+              <label className="flex items-center gap-2 text-base font-bold text-sky-900 pr-1">
+                <Users size={20} className="text-amber-500" />اختر اسم المعلمة
+              </label>
+              <select 
+                value={selectedTeacher.id}
+                onChange={(e) => setSelectedTeacher(TEACHERS.find(t => t.id === e.target.value))}
+                className="w-full px-6 py-4 rounded-2xl bg-sky-50/50 border-2 border-transparent focus:border-amber-400 focus:bg-white outline-none text-lg text-sky-900 shadow-sm appearance-none cursor-pointer"
+              >
+                {TEACHERS.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <p className="text-xs text-sky-600 font-bold px-2">يوم الاختبار: {selectedTeacher.day}</p>
+            </div>
+            <div className="space-y-4">
+              <label className="flex items-center gap-2 text-base font-bold text-sky-900 pr-1">
+                <User size={20} className="text-amber-500" />اسم الطالبة
+              </label>
+              <input
+                type="text" value={studentName} onChange={(e) => setStudentName(e.target.value)}
+                placeholder="الرجاء كتابة الاسم هنا..."
+                className="w-full px-6 py-4 rounded-2xl bg-sky-50/50 border-2 border-transparent focus:border-amber-400 focus:bg-white outline-none text-lg text-sky-900 shadow-sm placeholder:text-sky-300"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-8">
+          <div className="flex items-center gap-4 mb-8">
+            <div className="h-10 w-2 bg-amber-400 rounded-full shadow-sm"></div>
+            <h2 className="text-2xl font-bold text-sky-900">مواعيد الاختبار المتاحة</h2>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-5">
+            {currentSlots.map((time) => {
+              let availableCommitteeIndex = -1;
+              let bookedCount = 0;
+              
+              for (let i = 0; i < selectedTeacher.slots; i++) {
+                if (reservations[`${selectedTeacher.id}-${time}-${i}`]) {
+                  bookedCount++;
+                } else if (availableCommitteeIndex === -1) {
+                  availableCommitteeIndex = i;
+                }
+              }
+
+              const isFullyBooked = bookedCount >= selectedTeacher.slots;
+
+              return (
+                <div key={time} className={`group relative p-6 rounded-[2rem] border-2 transition-all duration-300 transform ${
+                  isFullyBooked ? 'bg-slate-100 opacity-60' : 'bg-white shadow-sm hover:border-amber-400 hover:-translate-y-1'
+                }`}>
+                  <div className="flex justify-between items-center mb-4">
+                    <span className={`text-xl font-bold ${isFullyBooked ? 'text-slate-400' : 'text-sky-900'}`}>{time}</span>
+                    {!isFullyBooked && <Clock className="text-amber-400" size={18} />}
+                  </div>
+                  
+                  {isFullyBooked ? (
+                    <div className="text-center py-2 bg-slate-200/50 rounded-xl"><span className="text-xs font-bold text-slate-500">مكتمل</span></div>
+                  ) : (
+                    <button
+                      disabled={isSubmitting}
+                      onClick={() => handleBooking(time, availableCommitteeIndex)}
+                      className="w-full py-3 bg-sky-600 text-white rounded-2xl text-sm font-bold hover:bg-sky-700 transition-all active:scale-95"
+                    >
+                      {isSubmitting ? '...' : 'حجز'}
+                    </button>
+                  )}
+                  <div className="mt-2 text-[10px] text-center text-sky-400 font-medium">
+                    متاح: {selectedTeacher.slots - bookedCount} من {selectedTeacher.slots}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
